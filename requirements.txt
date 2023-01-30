@@ -1,0 +1,6 @@
+falcon
+waitress
+Authlib 
+requests
+falcon-auth
+python-dotenv
