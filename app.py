@@ -1,6 +1,8 @@
 import falcon, json, requests, os
-from authlib.integrations.requests_client import OAuth2Session
 from dotenv import load_dotenv
+from authlib.integrations.requests_client import OAuth2Session
+from authlib.oidc.core import CodeIDToken
+from authlib.jose import jwt
 
 # take env variables from .env
 load_dotenv()
@@ -18,6 +20,27 @@ authorization_response = ''
 # Create an OAuth2Session instance
 oauth2_client = OAuth2Session(client_id, client_secret,redirect_uri=redirect_uri, scope=scope)      
 
+jwks = {
+  "keys": [
+    {
+      "kty": "RSA",
+      "alg": "RS256",
+      "e": "AQAB",
+      "use": "sig",
+      "n": "or83anRxFNTbjOy47m4SRDZQ7WpX_yjJdqN_LgNUBfbb_VnBwIUv_k4E1tXOE1yQC704YAT6JQ4AJtvLw598NxSuyXSvo-JCQ4pNugjVZ0w2MErJtARcxCu4LI6gsA_xSfSfuNVVSdrHqg8G-wsog0BS6N4M5IJtUlRR6UtjLaJxgqFGzV5sHWAfmpBekqCC5l19OXtE9J00r_Wjo4kfleonpVlEHszx5KUzShfGTGwgoeryNcp4yBULh8El8vt50a4SP_D74gCL5YINUl4E8hfQoqbPoxLj33oXYEvMKL34xYErEF5Tw39oAEfky3OgTXsCQvAp5il7HQjRY1JGow",
+      "kid": "afc4fba6599ff5f63b72dc522428278682f3a7f1"
+    },
+    {
+      "kid": "274052a2b6448745764e72c3590971d90cfb585a",
+      "n": "w0PgyEXUS2Stec6a5nxWPg_39M9D2x-zQedSwBEYthJ9d4x5mf-h69H2u555VYI6TUA59I0cyFlEKzqMsednebyfNBld1QCjb1q9xxnRSS4YrFiQSdXSPiurlrEvrl_O04pLLx_yoXnCRSgO_Q21wj0QsfNZ5quMIcr72kmswOiqCdZOWgWKkYt_UKJKEIYLkRNykGQeA6rBIomsTqKJzkBY4ke7YAoBS2BsQgmPgOGD39EGp2sqDvbcLYME-2z8HEMNZIL78sBnCQ0ov3Mv5F1ds8FcBUp1qWgG-j81HMN0SkZPK5RCteP4eacOaXYS7FzNyXQYi_45PBQi9W0NHQ",
+      "kty": "RSA",
+      "alg": "RS256",
+      "use": "sig",
+      "e": "AQAB"
+    }
+  ]
+}
+
 class MyResource:
     def on_get(self, req, resp):
         content = {
@@ -27,6 +50,16 @@ class MyResource:
         resp.body = json.dumps(content)
         resp.status = falcon.HTTP_200
 
+class SearchApi:
+    def on_get(self, req, resp):
+        # Get query parameters from the request
+        query_parameters = req.params
+
+        # Use requests library to make a GET request to the public API
+        response = requests.get('http://openlibrary.org/search.json?title=spiderman', params=query_parameters)
+
+        # Set the response body to the data received from the API
+        resp.body = response.text
 
 class AuthMiddleware:
     def __init__(self, oauth2_client):
@@ -34,15 +67,29 @@ class AuthMiddleware:
 
     def process_request(self, req, resp):
         if req.path.startswith("/api"):
-            try:
-                authorization_response = req.url
-                token = oauth2_client.fetch_token(token_endpoint, authorization_response=authorization_response)
-                print("Token", token)   # Use the token for authenticated requests
-                claims = oauth2_client.get("https://openidconnect.googleapis.com/v1/userinfo").json()
-                print("Claims", claims)
-            except Exception as e:
-                print(e)
-                raise falcon.HTTPFound(location='/login')
+            if not validate_jwt(req.cookies.get("jwt")):
+                try:
+                    authorization_response = req.url
+                    token = oauth2_client.fetch_token(token_endpoint, authorization_response=authorization_response, grant_type="client_credentials", expires_in=3600)
+                    print("Token", token) 
+                    resp.set_cookie("jwt", token["id_token"])
+                    claims = oauth2_client.get("https://openidconnect.googleapis.com/v1/userinfo").json()
+                    print("Claims", claims)
+                except Exception as e:
+                    print(e)
+                    raise falcon.HTTPFound(location='/login')
+            else:
+                pass
+
+def validate_jwt(token):
+    try: 
+        claims = jwt.decode(token, jwks, claims_cls=CodeIDToken)
+        print(claims)
+        claims.validate()
+        return True
+    except Exception as e:
+        print(e)
+        return False
 
 class Login:
     def on_get(self, req, resp):
@@ -56,3 +103,4 @@ class Login:
 app = falcon.API(middleware=[AuthMiddleware(oauth2_client)])
 app.add_route("/login", Login())
 app.add_route("/api/hello", MyResource())
+app.add_route("/api/search", SearchApi())
