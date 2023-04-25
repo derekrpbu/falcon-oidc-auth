@@ -17,6 +17,9 @@ authorization_endpoint = "https://accounts.google.com/o/oauth2/auth"
 token_endpoint = 'https://www.googleapis.com/oauth2/v3/token'
 authorization_response = ''
 
+# define list of emails that have access to the app
+email_list = ['derekrpbu@gmail.com']
+
 # Create an OAuth2Session instance
 oauth2_client = OAuth2Session(client_id, client_secret,redirect_uri=redirect_uri, scope=scope)      
 
@@ -66,18 +69,21 @@ class AuthMiddleware:
         self.oauth2_client = oauth2_client
 
     def process_request(self, req, resp):
-        if req.path.startswith("/api"):
+        if req.path.startswith("/app"):
             if not validate_jwt(req.cookies.get("jwt")):
                 try:
                     authorization_response = req.url
-                    token = oauth2_client.fetch_token(token_endpoint, authorization_response=authorization_response, grant_type="client_credentials", expires_in=3600)
+                    token = oauth2_client.fetch_token(token_endpoint, authorization_response=authorization_response, grant_type="authorization_code", expires_in=3600)
                     print("Token", token) 
                     resp.set_cookie("jwt", token["id_token"])
-                    claims = oauth2_client.get("https://openidconnect.googleapis.com/v1/userinfo").json()
+                    claims = oauth2_client.get("https://preprod.connect.kyndryl.net/oauth2/default/v1/userinfo").json()
                     print("Claims", claims)
                 except Exception as e:
                     print(e)
                     raise falcon.HTTPFound(location='/login')
+                if not validate_user(token["id_token"]):
+                    print("User Unauthorized")
+                    raise falcon.HTTPStatus(401, text="Unauthorized")              
             else:
                 pass
 
@@ -86,9 +92,19 @@ def validate_jwt(token):
         claims = jwt.decode(token, jwks, claims_cls=CodeIDToken)
         print(claims)
         claims.validate()
-        return True
+        if not validate_user(token):
+            return False
     except Exception as e:
         print(e)
+        return False
+    
+def validate_user(token):
+    claims = jwt.decode(token, jwks, claims_cls=CodeIDToken)
+    email = claims.get("email")
+    print(email)
+    if email in email_list:
+        return True
+    else: 
         return False
 
 class Login:
